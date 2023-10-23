@@ -1,5 +1,4 @@
-
-#!/usr/bin/env python
+# !/usr/bin/env python
 # -*- encoding: utf-8 -*-
 '''
 @File    :   NCNES.py
@@ -18,13 +17,15 @@ from mpi4py import MPI
 
 from logger import Logger
 from function import test_func_bound, TestEnv
-#from src.base import BaseAlgo
+
+# from src.base import BaseAlgo
 
 # 以下三个变量用于描述版本号和具体内容之间的联系
 # 如版本1，3 采用Bestfound_i 来填充
 VersionUsingBestfound = [1, 3]
 VersionUsingFather = [2, 4]
 VersionDivideEveryEpoch = [3, 4]
+
 
 class NCNESAlgo(object):
     def __init__(self, **kwargs):
@@ -50,6 +51,7 @@ class NCNESAlgo(object):
             reward_father  所有线程的父代适应度集合
             reward_child   所有线程的子代适应度集合
         '''
+        self.start_time = None
         self.comm = MPI.COMM_WORLD
         self.rank = self.comm.Get_rank()
         self.cpus = self.comm.Get_size()
@@ -58,7 +60,7 @@ class NCNESAlgo(object):
         self.args = kwargs
         # self.lam = self.cpus - 1
         # self.epoch = self.args['epoch']
-        self.sigma0 = self.args['sigma0'] # sigma_init
+        self.sigma0 = self.args['sigma0']  # sigma_init
         self.r = self.args['r']
 
         # NCNES hyperparams
@@ -69,13 +71,13 @@ class NCNESAlgo(object):
         self.lr_mean = self.args['lr_mean']
         self.lr_decay = True
         self.phi_decay = True
-        self.parallel = self.args['parallel'] # i,p,s
+        self.parallel = self.args['parallel']  # i,p,s
 
         # set up random seed
-        self.randomSeed = np.random.randint(1,1000000)
+        self.randomSeed = np.random.randint(1, 1000000)
         self.logger = Logger(self.logPath())
         # self.logger.log("seed:%s" % str(self.seed))
-        self.rs = np.random.RandomState(self.randomSeed+self.rank)
+        self.rs = np.random.RandomState(self.randomSeed + self.rank)
 
         # 创建策略模型以及设置对应的超参数
         bound = test_func_bound[self.args['function_id']]
@@ -109,18 +111,18 @@ class NCNESAlgo(object):
         self.reward_child = None
 
         self.log_retest = {
-            'iterations':[],
-            'performance':[]
+            'iterations': [],
+            'performance': []
         }
 
     def firstEvaluation(self):
         """初始化种群后对个体进行评估
         """
         msg = self.evaluate(self.param)
-        results = np.empty((self.cpus,2))
+        results = np.empty((self.cpus, 2))
         self.comm.Allgather([msg, MPI.DOUBLE],
                             [results, MPI.DOUBLE])
-        self.reward_father = results[:,:1].flatten()
+        self.reward_father = results[:, :1].flatten()
         self.BestScore_t[0] = msg
         self.comm.Allgather([self.BestScore_t, MPI.DOUBLE], [self.BestScore_t_all, MPI.DOUBLE])
         self.udpateBEST()
@@ -136,10 +138,10 @@ class NCNESAlgo(object):
         oldBESTSCORE = self.BESTSCORE
 
         self.BESTSCORE = np.min(self.BestScore_t_all.flatten()[1:])
-        self.BESTSCORE_id = np.argmin(self.BestScore_t_all.flatten()[1:])+1
+        self.BESTSCORE_id = np.argmin(self.BestScore_t_all.flatten()[1:]) + 1
         self.BESTParam = self.BestParam_t_all[self.BESTSCORE_id].copy()
         if self.BESTSCORE < oldBESTSCORE and self.rank == 0:
-            self.logger.save_parameters(self.BESTParam,self.iteration)
+            self.logger.save_parameters(self.BESTParam, self.iteration)
 
     def updateBest_t(self, score, param):
         """更新当前线程的最优个体得分与参数
@@ -162,7 +164,7 @@ class NCNESAlgo(object):
         """计算 llambda的值，这里采用llambda表示算法中的lambda，因为lambda在python中是一个关键字
         """
         percent = self.iteration / self.iter_max
-        self.llambda = np.random.randn() * (0.1-0.1*percent) + 1.0
+        self.llambda = np.random.randn() * (0.1 - 0.1 * percent) + 1.0
 
     def calphi(self):
         """自适应调整phi"""
@@ -174,12 +176,13 @@ class NCNESAlgo(object):
         percent = self.iteration / self.iter_max
         lr_mean = self.lr_mean * (math.e - math.exp(percent)) / (math.e - 1)
         lr_sigma = self.lr_sigma * (math.e - math.exp(percent)) / (math.e - 1)
-        return lr_mean,lr_sigma
+        return lr_mean, lr_sigma
 
     def logPath(self):
         """返回日志的路径
         """
-        return "logs_mpi/function%d/NCNES/%s/lam%s/mu%s/%s" %(self.args['function_id'],self.parallel, self.lam, self.pop_size, self.args['run_name'])
+        return "logs_mpi/function%d/NCNES/%s/lam%s/mu%s/%s" % (
+        self.args['function_id'], self.parallel, self.lam, self.pop_size, self.args['run_name'])
 
     def run(self):
         """算法类的运行函数，即主循环
@@ -210,8 +213,8 @@ class NCNESAlgo(object):
             self.params_all = self.syncOneVector(self.param)
             self.sigma_all = self.syncOneVector(self.sigma)
 
-            params_grad,sigma_grad = self.calGrad(
-                self.param,     self.sigma,
+            params_grad, sigma_grad = self.calGrad(
+                self.param, self.sigma,
                 self.param_all, self.sigma_all
             )
             self.updateMean(params_grad)
@@ -262,7 +265,7 @@ class NCNESAlgo(object):
 
         对mpi的简单封装
         """
-        v_t = np.array(v,dtype=np.float)
+        v_t = np.array(v, dtype=np.float32)
         v_all = np.zeros((self.cpus, v_t.shape[0]))
         self.comm.Allgather([v_t, MPI.DOUBLE], [v_all, MPI.DOUBLE])
         return v_all
@@ -281,8 +284,8 @@ class NCNESAlgo(object):
         if self.rank != 0:
             # 生成子代
             # * is element wise
-            self.param_new = self.param + self.rs.normal(scale = self.sigma,size = self.n)
-            self.param_new = np.clip(self.param_new,self.args['L'],self.args['H'])
+            self.param_new = self.param + self.rs.normal(scale=self.sigma, size=self.n)
+            self.param_new = np.clip(self.param_new, self.args['L'], self.args['H'])
 
             # 评估子代
             msg_new = self.evaluate(self.param_new)
@@ -294,13 +297,13 @@ class NCNESAlgo(object):
 
         self.reward_child = self.syncOneValue(reward_child_t)
 
-    def log(self,iter_start_time):
+    def log(self, iter_start_time):
         """日志函数
         """
         logger = self.logger
         if self.rank == 0:
             if self.iteration % 100 == 0:
-                logger.log('Time'.ljust(25) +'%f' % (time.time()-iter_start_time))
+                logger.log('Time'.ljust(25) + '%f' % (time.time() - iter_start_time))
                 logger.log('Iteration'.ljust(25) + '%d' % self.iteration)
                 logger.log('Best'.ljust(25) + '%f' % self.BESTSCORE)
 
@@ -313,7 +316,7 @@ class NCNESAlgo(object):
         if self.rank == 0:
             logger.log('Final'.ljust(25) + '%e' % msg)
             logger.save_parameters(self.BESTParam, self.iteration)
-            time_elapsed = (time.time() - self.start_time)/60
+            time_elapsed = (time.time() - self.start_time) / 60
             logger.log('TimeSinceStart'.ljust(25) + '%f' % time_elapsed)
             logger.log("random seed: %d" % self.randomSeed)
             self.save_retest_log()
@@ -335,93 +338,94 @@ class NCNESAlgo(object):
             logger.log("lr decay enable ?:%s" % self.lr_decay)
             logger.log("phi decay enable ?:%s" % self.phi_decay)
 
-    def calUtility(self,rewards):
+    def calUtility(self, rewards):
         rank = [0 for i in range(len(rewards))]
-        for r,i in enumerate(np.argsort(rewards)[::-1]):
+        for r, i in enumerate(np.argsort(rewards)[::-1]):
             rank[i] = r + 1  # rank kid by reward
         mu = self.pop_size
         util_ = np.maximum(0, np.log(mu / 2 + 1) - np.log(rank))
         utility = (util_ / (util_.sum())) - (1 / mu)
         return utility
 
-    def calFFisher(self,params,sigma,params_list,sigma_list):
+    def calFFisher(self, params, sigma, params_list, sigma_list):
         '''计算fmean,fsigma,fishermean,fishersigma'''
         utility = self.calUtility(self.reward_child)
 
-        fmean = np.zeros_like(params, dtype=np.float)
-        fsigma = np.zeros_like(params, dtype=np.float)
-        fishermean = np.zeros_like(params, dtype=np.float)
-        fishersigma = np.zeros_like(params, dtype=np.float)
+        fmean = np.zeros_like(params, dtype=np.float32)
+        fsigma = np.zeros_like(params, dtype=np.float32)
+        fishermean = np.zeros_like(params, dtype=np.float32)
+        fishersigma = np.zeros_like(params, dtype=np.float32)
 
         # if param all is sync
-        for i,params2 in enumerate(params_list):
+        for i, params2 in enumerate(params_list):
             noise = params2 - params
             sigma_inverse = 1 / (sigma + self.eps)
-            tmp1 = sigma_inverse*noise*noise*sigma_inverse
-            tmp1 = np.clip(tmp1,self.args['L'],self.args['H'])
+            tmp1 = sigma_inverse * noise * noise * sigma_inverse
+            tmp1 = np.clip(tmp1, self.args['L'], self.args['H'])
             tmp_ = tmp1 - sigma_inverse
 
-            fmean = fmean + sigma_inverse*noise*utility[i]
-            fsigma = fsigma + tmp_*utility[i]
+            fmean = fmean + sigma_inverse * noise * utility[i]
+            fsigma = fsigma + tmp_ * utility[i]
             fishermean = fishermean + tmp1
-            fishersigma = fishersigma + np.clip(tmp_*tmp_,0.0001,1000)
+            fishersigma = fishersigma + np.clip(tmp_ * tmp_, 0.0001, 1000)
 
-        fmean = fmean/self.pop_size
-        fsigma = fsigma/2/self.pop_size
-        fishermean = fishermean/self.pop_size
-        fishersigma = fishersigma/4/self.pop_size
+        fmean = fmean / self.pop_size
+        fsigma = fsigma / 2 / self.pop_size
+        fishermean = fishermean / self.pop_size
+        fishersigma = fishersigma / 4 / self.pop_size
 
-        return fmean,fsigma,fishermean,fishersigma
+        return fmean, fsigma, fishermean, fishersigma
 
-    def calDiversity(self,params,sigma,params_list,sigma_list):
+    def calDiversity(self, params, sigma, params_list, sigma_list):
         '''计算dmean,dsigma'''
 
-        dmean = np.zeros_like(params,dtype=np.float)
-        dsigma = np.zeros_like(params,dtype=np.float)
+        dmean = np.zeros_like(params, dtype=np.float32)
+        dsigma = np.zeros_like(params, dtype=np.float32)
 
         for params2, sigma2 in zip(params_list, sigma_list):
             sigma_part = 2 / (sigma + sigma2 + self.eps)
             params_minus = params - params2
             dmean = dmean + sigma_part * params_minus
-            dsigma = dsigma + sigma_part-1/(4*sigma_part*params_minus*params_minus*sigma_part + self.eps)-1/(sigma + self.eps)
+            dsigma = dsigma + sigma_part - 1 / (
+                        4 * sigma_part * params_minus * params_minus * sigma_part + self.eps) - 1 / (sigma + self.eps)
 
         dmean = dmean / 4
         dsigma = dsigma / 4
 
-        return dmean,dsigma
+        return dmean, dsigma
 
-    def calGrad(self,params,sigma,params_list,sigma_list):
-        params_grad = np.zeros_like(params,dtype=np.float)
-        sigma_grad = np.zeros_like(params,dtype=np.float)
+    def calGrad(self, params, sigma, params_list, sigma_list):
+        params_grad = np.zeros_like(params, dtype=np.float32)
+        sigma_grad = np.zeros_like(params, dtype=np.float32)
 
-        fmean,fsigma,fishermean,fishersigma = self.calFFisher(params,sigma,params_list,sigma_list)
-        #self.logger.log('fmean'+str(self.calDist(fmean)))
-        #self.logger.log('fsigma'+str(self.calDist(fsigma)))
-        #self.logger.log('sishermean'+str(self.calDist(fishermean)))
-        #self.logger.log('fishersigma'+str(self.calDist(fishersigma)))
+        fmean, fsigma, fishermean, fishersigma = self.calFFisher(params, sigma, params_list, sigma_list)
+        # self.logger.log('fmean'+str(self.calDist(fmean)))
+        # self.logger.log('fsigma'+str(self.calDist(fsigma)))
+        # self.logger.log('sishermean'+str(self.calDist(fishermean)))
+        # self.logger.log('fishersigma'+str(self.calDist(fishersigma)))
 
-        dmean,dsigma = self.calDiversity(params,sigma,params_list,sigma_list)
-        #self.logger.log('dmean'+str(self.calDist(dmean)))
-        #self.logger.log('dsigma'+str(self.calDist(dsigma)))
+        dmean, dsigma = self.calDiversity(params, sigma, params_list, sigma_list)
+        # self.logger.log('dmean'+str(self.calDist(dmean)))
+        # self.logger.log('dsigma'+str(self.calDist(dsigma)))
 
         params_grad = 1 / (fishermean * (fmean + self.phi * dmean) + self.eps)
         sigma_grad = 1 / (fishersigma * (fsigma + self.phi * dsigma) + self.eps)
         params_grad = self.checkbound(params_grad, -10, 10)
-        sigma_grad = self.checkbound(sigma_grad, -10,10)
+        sigma_grad = self.checkbound(sigma_grad, -10, 10)
 
-        return params_grad,sigma_grad
+        return params_grad, sigma_grad
 
-    def calDist(self,p):
-        return np.max(p),np.min(p),np.mean(p),np.var(p)
+    def calDist(self, p):
+        return np.max(p), np.min(p), np.mean(p), np.var(p)
 
-    def updateSigma(self,sigma_grad):
+    def updateSigma(self, sigma_grad):
         """更新协方差，并同步
         """
         if self.rank != 0:
             self.sigma = self.sigma + self.lr_sigma * sigma_grad
-            self.sigma = self.checkbound(self.sigma,1e-8,1e8)
+            self.sigma = self.checkbound(self.sigma, 1e-8, 1e8)
 
-    def updateMean(self,params_grad):
+    def updateMean(self, params_grad):
         """更新协方差，并同步
         """
         if self.rank != 0:
@@ -429,10 +433,11 @@ class NCNESAlgo(object):
             self.param = self.checkbound(self.param, self.args['L'], self.args['H'])
 
     @staticmethod
-    def checkbound(params,low,high):
-        params[np.isnan(params)]=np.mean(params)
+    def checkbound(params, low, high):
+        params[np.isnan(params)] = np.mean(params)
         params = np.clip(params, low, high)
         return params
+
 
 '''
 NCNES算法的入口文件，用于处理输入参数。
@@ -449,19 +454,22 @@ NCNES算法的入口文件，用于处理输入参数。
     --lr_mean         NCNES算法中mean梯度更新的学习率
 '''
 
+
 @click.command()
-@click.option('--run_name', '-r', required=True, type=click.STRING, help='Name of the run, used to create log folder name')
+@click.option('--run_name', '-r', required=True, type=click.STRING,
+              help='Name of the run, used to create log folder name')
 @click.option('--function_id', '-f', type=click.INT, help='function id for function optimization')
-@click.option('--dimension', '-d', type=click.INT,default=100, help='the dimension of solution for function optimization')
+@click.option('--dimension', '-d', type=click.INT, default=100,
+              help='the dimension of solution for function optimization')
 @click.option('--sigma0', type=click.FLOAT, default=2, help='the intial value of sigma')
 @click.option('--rvalue', type=click.FLOAT, default=0.99, help='sigma update parameter')
 @click.option('--lam', type=click.INT, default=5, help='population nums')
 @click.option('--mu', type=click.INT, default=15, help='population size')
-@click.option('--parallel','-p', type=click.STRING, default='p', help='parallel mode')
+@click.option('--parallel', '-p', type=click.STRING, default='p', help='parallel mode')
 @click.option('--phi', type=click.FLOAT, default=0.00001, help='negative correation factor')
 @click.option('--lr_sigma', type=click.FLOAT, default=0.2, help='sigma learning rate')
 @click.option('--lr_mean', type=click.FLOAT, default=0.1, help='mean learning rate')
-def main(run_name, function_id, dimension, sigma0, rvalue,parallel,phi,lam,mu,lr_sigma,lr_mean):
+def main(run_name, function_id, dimension, sigma0, rvalue, parallel, phi, lam, mu, lr_sigma, lr_mean):
     # 算法入口
     kwargs = {
         'sigma0': sigma0,
@@ -471,12 +479,12 @@ def main(run_name, function_id, dimension, sigma0, rvalue,parallel,phi,lam,mu,lr
         'r': rvalue,
         'H': 10,
         'L': -10,
-        'parallel':parallel,
-        'lr_sigma':lr_sigma,
-        'lr_mean':lr_mean,
-        'phi':phi,
-        'lam':lam,
-        'mu':mu
+        'parallel': parallel,
+        'lr_sigma': lr_sigma,
+        'lr_mean': lr_mean,
+        'phi': phi,
+        'lam': lam,
+        'mu': mu
     }
     algo = NCNESAlgo(**kwargs)
     algo.run()
@@ -486,4 +494,3 @@ def main(run_name, function_id, dimension, sigma0, rvalue,parallel,phi,lam,mu,lr
 
 if __name__ == '__main__':
     main()
-
