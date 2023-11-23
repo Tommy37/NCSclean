@@ -1,0 +1,1 @@
+149 行 `if score < self.BestScore_t[0]:`表示该算法找最小值

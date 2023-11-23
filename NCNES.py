@@ -1,11 +1,11 @@
 # !/usr/bin/env python
 # -*- encoding: utf-8 -*-
-'''
+"""
 @File    :   NCNES.py
 @Time    :   2020/06/27 16:41:31
 @Author  :   Qi Yang
 @Describtion:  NCNES 算法类（自定义类不基于base）
-'''
+"""
 import time
 import pickle
 import click
@@ -33,12 +33,12 @@ class NCNESAlgo(object):
 
         重要成员变量说明
 
-            param     父代的参数（均值）
-            param_all 所有父代的参数
-            sigma     父代个体的协方差
-            sigma_all 所有父代个体的协方差
+            mean     父代的参数（均值）
+            mean_all 所有父代的参数
+            sigma     父代个体的协方差矩阵
+            sigma_all 所有父代个体的协方差矩阵
 
-            param_new 子代的参数
+            mean_new 子代的参数
 
             BestParam_t     每个线程中的最优个体参数（分布均值）
             BestParam_t_all 所有线程中的最优个体参数集合
@@ -85,18 +85,18 @@ class NCNESAlgo(object):
         self.sigma0 = (bound[1] - bound[0]) / self.lam
         self.env = TestEnv(self.args['D'], self.args['function_id'])
 
-        # 同步不同线程的参数到param_all变量中
-        self.param = self.rs.uniform(bound[0], bound[1], self.args['D'])
-        self.n = len(self.param)
-        self.param_all = np.empty((self.cpus, self.n))
+        # 同步不同线程的mean到mean_all变量中
+        self.mean = self.rs.uniform(bound[0], bound[1], self.args['D'])
+        self.n = len(self.mean)
+        self.mean_all = np.empty((self.cpus, self.n))
         # 用这个当作 mean list
-        self.comm.Allgather([self.param, MPI.DOUBLE], [self.param_all, MPI.DOUBLE])
+        self.comm.Allgather([self.mean, MPI.DOUBLE], [self.mean_all, MPI.DOUBLE])
 
-        self.param_new = np.zeros(self.n)
+        self.mean_new = np.zeros(self.n)
         self.sigma = np.ones(self.n) * self.sigma0
         self.sigma_all = np.ones((self.cpus, self.n))
-        self.BestParam_t = self.param.copy()
-        self.BestParam_t_all = self.param_all.copy()
+        self.BestParam_t = self.mean.copy()
+        self.BestParam_t_all = self.mean_all.copy()
         self.BestScore_t = np.zeros(1)
         self.BestScore_t_all = np.zeros((self.cpus, 1))
         # BEST in all threads
@@ -104,7 +104,8 @@ class NCNESAlgo(object):
         self.BESTSCORE_id = 0
         self.BESTParam = np.empty(self.n)
         self.iteration = 0
-        self.eps = 1e-8
+        # epsilon, very small number, ensures that no zeros appear in the log computation
+        self.epsilon = 1e-8
 
         self.logBasic()
         self.firstEvaluation()
@@ -118,7 +119,7 @@ class NCNESAlgo(object):
     def firstEvaluation(self):
         """初始化种群后对个体进行评估
         """
-        msg = self.evaluate(self.param)
+        msg = self.evaluate(self.mean)
         results = np.empty((self.cpus, 2))
         self.comm.Allgather([msg, MPI.DOUBLE],
                             [results, MPI.DOUBLE])
@@ -150,27 +151,29 @@ class NCNESAlgo(object):
             self.BestScore_t[0] = score
             self.BestParam_t = param.copy()
 
-    def evaluate(self, parameters):
+    def evaluate(self, x):
         """evaluate封装
         返回值：
             msg: [mean_reward, sum_len]
                 第一个为平均得分
                 第二个为消耗的训练帧总和
         """
-        f = self.env.evaluate(parameters)
-        return f
+        return self.env.evaluate(x)
 
+    # TODO:
     def calLlambda(self):
         """计算 llambda的值，这里采用llambda表示算法中的lambda，因为lambda在python中是一个关键字
         """
         percent = self.iteration / self.iter_max
         self.llambda = np.random.randn() * (0.1 - 0.1 * percent) + 1.0
 
+    #TODO:
     def calphi(self):
         """自适应调整phi"""
         percent = self.iteration / self.iter_max
         return self.phi * (math.e - math.exp(percent)) / (math.e - 1)
 
+    #TODO:
     def callr(self):
         """自适应调整lr mean 和lr sigma"""
         percent = self.iteration / self.iter_max
@@ -210,16 +213,16 @@ class NCNESAlgo(object):
                 self.genAndEvalChild_s()
 
             self.udpateBEST()
-            self.params_all = self.syncOneVector(self.param)
+            self.mean_all = self.syncOneVector(self.mean)
             self.sigma_all = self.syncOneVector(self.sigma)
 
             params_grad, sigma_grad = self.calGrad(
-                self.param, self.sigma,
-                self.param_all, self.sigma_all
+                self.mean, self.sigma,
+                self.mean_all, self.sigma_all
             )
             self.updateMean(params_grad)
             self.updateSigma(sigma_grad)
-            self.params_all = self.syncOneVector(self.param)
+            self.mean_all = self.syncOneVector(self.mean)
             self.sigma_all = self.syncOneVector(self.sigma)
 
             self.log(iter_start_time)
@@ -284,13 +287,13 @@ class NCNESAlgo(object):
         if self.rank != 0:
             # 生成子代
             # * is element wise
-            self.param_new = self.param + self.rs.normal(scale=self.sigma, size=self.n)
-            self.param_new = np.clip(self.param_new, self.args['L'], self.args['H'])
+            self.mean_new = self.mean + self.rs.normal(scale=self.sigma, size=self.n)
+            self.mean_new = np.clip(self.mean_new, self.args['L'], self.args['H'])
 
             # 评估子代
-            msg_new = self.evaluate(self.param_new)
+            msg_new = self.evaluate(self.mean_new)
             reward_child_t = msg_new
-            self.updateBest_t(msg_new, self.param_new)
+            self.updateBest_t(msg_new, self.mean_new)
         else:
             # Empty array, evaluation results are not used for the update
             reward_child_t, reward_father_t = 0, 0
@@ -338,6 +341,7 @@ class NCNESAlgo(object):
             logger.log("lr decay enable ?:%s" % self.lr_decay)
             logger.log("phi decay enable ?:%s" % self.phi_decay)
 
+    # The bottom right corner of the fifth page of the paper
     def calUtility(self, rewards):
         rank = [0 for i in range(len(rewards))]
         for r, i in enumerate(np.argsort(rewards)[::-1]):
@@ -347,34 +351,48 @@ class NCNESAlgo(object):
         utility = (util_ / (util_.sum())) - (1 / mu)
         return utility
 
-    def calFFisher(self, params, sigma, params_list, sigma_list):
+
+
+
+
+    # 这段重写吧
+    def calFitness(self, mean, sigma, mean_list, sigma_list):
         '''计算fmean,fsigma,fishermean,fishersigma'''
         utility = self.calUtility(self.reward_child)
 
-        fmean = np.zeros_like(params, dtype=np.float32)
-        fsigma = np.zeros_like(params, dtype=np.float32)
-        fishermean = np.zeros_like(params, dtype=np.float32)
-        fishersigma = np.zeros_like(params, dtype=np.float32)
+        # grad_mean d * 1(or vector)
+        # grad_sigma d * d(matrix)
+        grad_mean = np.zeros_like(mean, dtype=np.float32)
+        grad_sigma = np.zeros_like(sigma, dtype=np.float32) #?
+        fishermean = np.zeros_like(sigma, dtype=np.float32)
+        fishersigma = np.zeros_like(sigma, dtype=np.float32) #?
 
         # if param all is sync
-        for i, params2 in enumerate(params_list):
-            noise = params2 - params
-            sigma_inverse = 1 / (sigma + self.eps)
+        for idx, m_j in enumerate(mean_list):
+            dif = m_j - mean
+            sigma_inverse = 1 / (sigma + self.epsilon)
             tmp1 = sigma_inverse * noise * noise * sigma_inverse
             tmp1 = np.clip(tmp1, self.args['L'], self.args['H'])
             tmp_ = tmp1 - sigma_inverse
 
-            fmean = fmean + sigma_inverse * noise * utility[i]
-            fsigma = fsigma + tmp_ * utility[i]
+            # ???
+            grad_mean = grad_mean + sigma_inverse * noise * utility[idx]
+
+
+            grad_sigma = grad_sigma + tmp_ * utility[idx]
             fishermean = fishermean + tmp1
             fishersigma = fishersigma + np.clip(tmp_ * tmp_, 0.0001, 1000)
 
-        fmean = fmean / self.pop_size
-        fsigma = fsigma / 2 / self.pop_size
+        # ???
+        grad_mean = grad_mean / self.pop_size
+
+
+
+        grad_sigma = grad_sigma / 2 / self.pop_size
         fishermean = fishermean / self.pop_size
         fishersigma = fishersigma / 4 / self.pop_size
 
-        return fmean, fsigma, fishermean, fishersigma
+        return grad_mean, grad_sigma, fishermean, fishersigma
 
     def calDiversity(self, params, sigma, params_list, sigma_list):
         '''计算dmean,dsigma'''
@@ -383,11 +401,11 @@ class NCNESAlgo(object):
         dsigma = np.zeros_like(params, dtype=np.float32)
 
         for params2, sigma2 in zip(params_list, sigma_list):
-            sigma_part = 2 / (sigma + sigma2 + self.eps)
+            sigma_part = 2 / (sigma + sigma2 + self.epsilon)
             params_minus = params - params2
             dmean = dmean + sigma_part * params_minus
             dsigma = dsigma + sigma_part - 1 / (
-                        4 * sigma_part * params_minus * params_minus * sigma_part + self.eps) - 1 / (sigma + self.eps)
+                        4 * sigma_part * params_minus * params_minus * sigma_part + self.epsilon) - 1 / (sigma + self.epsilon)
 
         dmean = dmean / 4
         dsigma = dsigma / 4
@@ -408,8 +426,8 @@ class NCNESAlgo(object):
         # self.logger.log('dmean'+str(self.calDist(dmean)))
         # self.logger.log('dsigma'+str(self.calDist(dsigma)))
 
-        params_grad = 1 / (fishermean * (fmean + self.phi * dmean) + self.eps)
-        sigma_grad = 1 / (fishersigma * (fsigma + self.phi * dsigma) + self.eps)
+        params_grad = 1 / fishermean * ((fmean + self.phi * dmean) + self.epsilon))
+        sigma_grad = 1 / (fishersigma * (fsigma + self.phi * dsigma) + self.epsilon)
         params_grad = self.checkbound(params_grad, -10, 10)
         sigma_grad = self.checkbound(sigma_grad, -10, 10)
 
@@ -429,14 +447,24 @@ class NCNESAlgo(object):
         """更新协方差，并同步
         """
         if self.rank != 0:
-            self.param = self.param + self.lr_mean * params_grad
-            self.param = self.checkbound(self.param, self.args['L'], self.args['H'])
+            self.mean = self.mean + self.lr_mean * params_grad
+            self.mean = self.checkbound(self.mean, self.args['L'], self.args['H'])
 
     @staticmethod
     def checkbound(params, low, high):
         params[np.isnan(params)] = np.mean(params)
         params = np.clip(params, low, high)
         return params
+
+
+def inverse(mat):
+    """ Inverse for a diagonal matrix.
+
+    mat: An diagonal matrix
+    """
+    d = mat.shape[0]
+    indices = np.diag_indices(d)
+    return np.diag(1 / mat[indices])
 
 
 '''
@@ -477,8 +505,8 @@ def main(run_name, function_id, dimension, sigma0, rvalue, parallel, phi, lam, m
         'function_id': function_id,
         'D': dimension,
         'r': rvalue,
-        'H': 10,
-        'L': -10,
+        'H': 100,
+        'L': -100,
         'parallel': parallel,
         'lr_sigma': lr_sigma,
         'lr_mean': lr_mean,
