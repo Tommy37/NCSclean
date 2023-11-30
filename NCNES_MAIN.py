@@ -17,9 +17,9 @@ However, I just built a simple model, how to update the hyperparameters is the r
 
 """
 
-
 from mpi4py import MPI
 import numpy as np
+import math
 from function import test_func_bound, TestEnv
 import click
 
@@ -33,44 +33,79 @@ class NCNESTM(object):
         # self.uni = self.rank
         # self.comm_list = np.zeros([8, 1])
 
-        self.distribution_size = kwargs['lam']
-        self.pop_size = kwargs['mu']
-        self.phi = kwargs['phi']
-        self.learning_rate_m = kwargs['lr_mean']
-        self.learning_rate_cov = kwargs['lr_sigma']
+        self.distribution_size = 0 #kwargs['lam']
+        self.pop_size = 0 #kwargs['mu']
+        self.phi = 0 #kwargs['phi']
+        self.learning_rate_m = 0 #kwargs['lr_mean']
+        self.learning_rate_cov = 0 #kwargs['lr_sigma']
         self.dimension = kwargs['D']
         self.fuc_id = kwargs['function_id']
-        self.eposides = 500
+        self.L = test_func_bound[self.fuc_id][0]
+        self.H = test_func_bound[self.fuc_id][1]
 
-        self.mean_list, self.cov_list = self.initDistributions()
+        self.iter_max = 10000 * self.dimension
+        self.iter_cur = 0
+
+        self.mean_list = None
+        self.cov_list = None
+
+        # self.mean_list, self.cov_list = self.initDistributions()
         self.rg = np.random.default_rng()
 
         self.env = TestEnv(self.dimension, self.fuc_id)
         self.epsilon = 1e-8
         self.best_score = None
 
-        print(f"""Start Running, 
-lam: {self.distribution_size}
-mu: {self.pop_size}
-phi: {self.phi}
-lrm: {self.learning_rate_m}
-lrcov: {self.learning_rate_cov}
-d: {self.dimension}
-o: {self.env.o}
-""")
-        print(self.mean_list)
-        print(self.cov_list)
+        self.set_hyperparameters()
+        self.display_info()
 
+        self.flag = True
+
+    def display_info(self):
+        print(f'Lam: {self.distribution_size}')
+        print(f'Mu: {self.pop_size}')
+        print(f'Phi: {self.phi}')
+        print(f"D: {self.dimension}")
+        print(f'Learning rate m: {self.learning_rate_m}')
+        print(f'Learning rate cov: {self.learning_rate_cov}')
+        print()
+        print(f'Mean: {self.mean_list}')
+        print(f'Cov: {self.cov_list}')
+
+    def set_hyperparameters(self):
+        logd = np.log(self.dimension)
+        self.distribution_size = math.ceil(logd)
+        self.mean_list = np.zeros([self.distribution_size, self.dimension])
+        self.cov_list = np.zeros([self.distribution_size, self.dimension])
+        self.pop_size = 4 + math.floor(3 * logd)
+        self.phi = 0.0001
+        self.learning_rate_m = 1
+        self.learning_rate_cov = (3 + logd) / (5 * np.sqrt(self.dimension))
+
+        cov_init = np.ones(self.dimension) * ((self.H - self.L) / self.distribution_size)
+        for i in range(self.distribution_size):
+            self.mean_list[i] = self.rg.uniform(self.L, self.H, self.dimension)
+        self.cov_list = self.cov_list + cov_init
+
+    def check_pos(self):
+        if not self.flag: return
+        for cov in self.cov_list:
+            for ele in cov:
+                if ele <= 0:
+                    self.flag = False
+                    print('Not positive.')
+                    print(self.cov_list)
+                    return
     def reward(self, x_list):
-        return np.array([self.env.evaluate(x) for x in x_list])
+        return self.env.evaluate_mul(x_list)
 
     def initDistributions(self):
         """
         Needs further development to generate a better initial distribution.
         :return:
         """
-        mean_list = np.ones([self.distribution_size, self.dimension])
-        cov_list = np.ones([self.distribution_size, self.dimension])
+        mean_list = np.ones([self.distribution_size, self.dimension]) * 50
+        cov_list = np.ones([self.distribution_size, self.dimension]) * 100
         # for i in range(self.distribution_size):
         #     means_list[i] = np.ones(self.dimension)
         #     diag = np.ones(self.dimension)
@@ -83,45 +118,58 @@ o: {self.env.o}
                 self.best_score = reward
 
     def fit(self):
-        for ep in range(self.eposides):
+        abcd = 0
+        while self.iter_cur < self.iter_max:
+            if abcd < 10:
+                print(self.cov_list)
+            abcd += 1
+            lr_m, lr_cov = self.lr_decay()
+            self.iter_cur += self.pop_size
+
             mean_list = np.zeros_like(self.mean_list)
             cov_list = np.zeros_like(self.cov_list)
             for i in range(self.distribution_size):
                 mean = self.mean_list[i]
                 cov = self.cov_list[i]
 
+
                 children = self.rg.multivariate_normal(mean, np.diag(cov), self.pop_size)
-                rewards = evaluate(children, self.env)
+                rewards = self.env.evaluate_mul(children)
                 self.update_score(rewards)
 
                 util = self.cal_util(rewards)
 
                 f_m_grad = self.f_m_grad(children, mean, cov, util)
                 f_cov_grad = self.f_cov_grad(children, mean, cov, util)
-                # d_m_grad = self.d_m_grad(mean, cov, self.mean_list, self.cov_list)
-                # d_cov_grad = self.d_cov_grad(mean, cov, self.mean_list, self.cov_list)
+                d_m_grad = self.d_m_grad(mean, cov, self.mean_list, self.cov_list)
+                d_cov_grad = self.d_cov_grad(mean, cov, self.mean_list, self.cov_list)
                 fisher_m = self.fisher_m(children, mean, cov)
                 fisher_cov = self.fisher_cov(children, mean, cov)
-                print()
-                print('fmg: ', f_m_grad)
-                print('fcovg: ', f_cov_grad)
-                print('fisher_m: ', fisher_m)
-                print('fisher_cov: ', fisher_cov)
-                print()
+                # print()
+                # print('Grad for mean: ', f_m_grad)
+                # print('Grad for cov: ', f_cov_grad)
+                # print('Fisher_m: ', fisher_m)
+                # print('Fisher_cov: ', fisher_cov)
+                # print()
 
-                mean += self.learning_rate_m * (1 / fisher_m) * (f_m_grad)  # + self.phi * d_m_grad)
-                cov += self.learning_rate_cov * (1 / fisher_cov) * (f_cov_grad)  # + self.phi * d_cov_grad)
+                mean += lr_m * (1 / fisher_m) * (f_m_grad + self.phi * d_m_grad)
+                cov += lr_cov * (1 / fisher_cov) * (f_cov_grad + self.phi * d_cov_grad)
+
+                # mean += (1 / fisher_m) * (f_m_grad)  # + self.phi * d_m_grad)
+                # cov += (1 / fisher_cov) * (f_cov_grad)  # + self.phi * d_cov_grad)
 
                 mean_list[i] += mean
                 cov_list[i] += cov
 
-                print('mean', mean)
-                print('cov', cov)
+                # print('Mean: ', mean)
+                # print('Cov: ', cov)
             self.mean_list = mean_list
             self.cov_list = cov_list
+            self.check_pos()
+            if (self.iter_cur / self.pop_size) % 50 == 0:
+                print('Best score %.2f, ep%d' % (self.best_score, self.iter_cur))
+                print()
 
-            # if ep % 5 == 0:
-            print('Best score %d, ep%d' % (self.best_score, ep))
 
     def cal_util(self, rewards):
         ranks = np.zeros_like(rewards)
@@ -150,7 +198,6 @@ o: {self.env.o}
             grad += cov_inv * X_dif[i] * rewards[i]
         grad /= self.pop_size
         return grad
-
 
     def f_cov_grad(self, X, mean, cov, rewards):
         """
@@ -237,6 +284,12 @@ o: {self.env.o}
         grad /= 4 * self.pop_size
         return grad
 
+    def lr_decay(self):
+        factor = (np.e - np.exp(self.iter_cur / self.iter_max)) / (np.e - 1)
+        lr_m = self.learning_rate_m * factor
+        lr_cov = self.learning_rate_cov * factor
+        return lr_m, lr_cov
+
 
 def evaluate(X, env):
     """
@@ -252,40 +305,21 @@ def evaluate(X, env):
     return rewards
 
 
-def main():
-    model = NCNESTM()
-    model.fit()
-
 @click.command()
 @click.option('--run_name', '-r', required=False, type=click.STRING,
               help='Name of the run, used to create log folder name')
-@click.option('--function_id', '-f', type=click.INT, help='function id for function optimization')
+@click.option('--function_id', '-f', type=click.INT, default=1,
+              help='function id for function optimization')
 @click.option('--dimension', '-d', type=click.INT, default=100,
               help='the dimension of solution for function optimization')
-@click.option('--sigma0', type=click.FLOAT, default=2, help='the intial value of sigma')
-@click.option('--rvalue', type=click.FLOAT, default=0.99, help='sigma update parameter')
-@click.option('--lam', type=click.INT, default=5, help='population nums')
-@click.option('--mu', type=click.INT, default=15, help='population size')
 @click.option('--parallel', '-p', type=click.STRING, default='p', help='parallel mode')
-@click.option('--phi', type=click.FLOAT, default=0.00001, help='negative correation factor')
-@click.option('--lr_sigma', '-etac', type=click.FLOAT, default=0.2, help='sigma learning rate')
-@click.option('--lr_mean', '-etam', type=click.FLOAT, default=0.1, help='mean learning rate')
-def main(run_name, function_id, dimension, sigma0, rvalue, parallel, phi, lam, mu, lr_sigma, lr_mean):
+def main(run_name, function_id, dimension, parallel):
     # 算法入口
     kwargs = {
-        # 'sigma0': sigma0,
         # 'run_name': run_name,
         'function_id': function_id,
         'D': dimension,
-        'r': rvalue,
-        # 'H': 100,
-        # 'L': -100,
         'parallel': parallel,
-        'lr_sigma': lr_sigma,
-        'lr_mean': lr_mean,
-        'phi': phi,
-        'lam': lam,
-        'mu': mu
     }
     model = NCNESTM(**kwargs)
     model.fit()
